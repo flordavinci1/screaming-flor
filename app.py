@@ -115,3 +115,22 @@ if urls_text:
         st.write(f"Enlaces internos encontrados: {res['internal_links_count']}")
 
         st.markdown("---")
+
+
+# CTA final
+st.markdown("---")
+st.markdown(
+    """
+    <div style="text-align: center;">
+        <p>✨ Esta herramienta fue creada con fines educativos y de asistencia a profesionales que están comenzando en SEO.</p>
+        <p>💌 ¿Te sirvió? ¿Tenés alguna sugerencia? ¿Querés charlar sobre SEO, educación digital o IA aplicada? Escribime a <a href="mailto:florencia@crawla.agency">florencia@crawla.agency</a></p>
+        <br>
+        <a href="https://www.linkedin.com/in/festevez3005/" target="_blank">
+            <button style="background-color:#4B8BBE; color:white; padding:10px 20px; font-size:16px; border:none; border-radius:6px; cursor:pointer;">
+                🌐 Conectá conmigo en LinkedIn
+            </button>
+        </a>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
