@@ -302,4 +302,309 @@ def add_duplicate_flags(df: pd.DataFrame) -> pd.DataFrame:
 
 def add_issue_flags(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Marca issues “educativos” típicos para roadmap
+    Marca issues “educativos” típicos para roadmap:
+    - status != 200, noindex, no https, title/meta fuera de rango, H1 != 1,
+      word_count muy bajo (umbral configurable), imágenes sin alt, anchors vacíos,
+      canonical faltante / no self, duplicados de title/meta/h1/canonical
+    """
+    df = df.copy()
+
+    # Base booleans con fallback
+    df["issue_fetch_error"] = df["error"].notna() if "error" in df.columns else False
+    df["issue_status"] = (df["status_code"].fillna(0).astype(int) != 200) if "status_code" in df.columns else False
+    df["issue_noindex"] = df.get("meta_noindex", False) | df.get("xrobots_noindex", False)
+
+    df["issue_https"] = ~df.get("https", True)
+    df["issue_title"] = ~df.get("title_ok", True)
+    df["issue_meta_desc"] = ~df.get("meta_desc_ok", True)
+    df["issue_h1"] = ~df.get("h1_ok", True)
+
+    # “Profundidad” (educativo): muy bajo puede indicar thin content (ojo, hay excepciones)
+    if "word_count_est" in df.columns:
+        df["issue_low_content"] = df["word_count_est"].fillna(0).astype(int) < 250
+    else:
+        df["issue_low_content"] = False
+
+    if "images_missing_alt" in df.columns:
+        df["issue_missing_alt"] = df["images_missing_alt"].fillna(0).astype(int) > 0
+    else:
+        df["issue_missing_alt"] = False
+
+    if "anchors_empty_text" in df.columns:
+        df["issue_empty_anchors"] = df["anchors_empty_text"].fillna(0).astype(int) > 0
+    else:
+        df["issue_empty_anchors"] = False
+
+    # Canonical issues: faltante o no self (si existe)
+    if "canonical" in df.columns:
+        df["issue_canonical_missing"] = df["canonical"].fillna("").astype(str).str.strip().eq("")
+    else:
+        df["issue_canonical_missing"] = False
+
+    if "canonical_self" in df.columns:
+        # Solo aplica si canonical existe
+        df["issue_canonical_not_self"] = (~df["canonical_self"]) & (~df.get("issue_canonical_missing", False))
+    else:
+        df["issue_canonical_not_self"] = False
+
+    # Duplicados
+    df["issue_dup_title"] = df.get("dup_title", False)
+    df["issue_dup_meta_desc"] = df.get("dup_meta_desc", False)
+    df["issue_dup_h1"] = df.get("dup_h1", False)
+    df["issue_dup_canonical"] = df.get("dup_canonical", False)
+
+    # Score simple (para ordenar)
+    issue_cols = [c for c in df.columns if c.startswith("issue_")]
+    df["issues_count"] = df[issue_cols].sum(axis=1).astype(int)
+
+    # Una etiqueta rápida de severidad (educativa)
+    def severity(n: int) -> str:
+        if n >= 6:
+            return "Alta"
+        if n >= 3:
+            return "Media"
+        if n >= 1:
+            return "Baja"
+        return "OK"
+
+    df["issues_severity"] = df["issues_count"].apply(severity)
+
+    # Texto explicativo compacto (para alumnos)
+    def build_issue_notes(row) -> str:
+        notes = []
+        if row.get("issue_fetch_error"): notes.append("Error de fetch")
+        if row.get("issue_status"): notes.append("Status ≠ 200")
+        if row.get("issue_noindex"): notes.append("Noindex")
+        if row.get("issue_https"): notes.append("No HTTPS")
+        if row.get("issue_title"): notes.append("Title fuera de rango")
+        if row.get("issue_meta_desc"): notes.append("Meta desc fuera de rango")
+        if row.get("issue_h1"): notes.append("H1 ≠ 1")
+        if row.get("issue_low_content"): notes.append("Contenido bajo")
+        if row.get("issue_missing_alt"): notes.append("Imágenes sin ALT")
+        if row.get("issue_empty_anchors"): notes.append("Anchors sin texto")
+        if row.get("issue_canonical_missing"): notes.append("Canonical faltante")
+        if row.get("issue_canonical_not_self"): notes.append("Canonical no self")
+        if row.get("issue_dup_title"): notes.append("Title duplicado")
+        if row.get("issue_dup_meta_desc"): notes.append("Meta desc duplicada")
+        if row.get("issue_dup_h1"): notes.append("H1 duplicado")
+        if row.get("issue_dup_canonical"): notes.append("Canonical duplicado")
+        return " | ".join(notes)
+
+    df["issues_notes"] = df.apply(build_issue_notes, axis=1)
+
+    return df
+
+
+def build_duplicates_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Devuelve un DF solo con duplicados para exportar / revisar."""
+    cols = ["url", "final_url", "title", "meta_desc", "h1_text", "canonical",
+            "dup_title", "dup_meta_desc", "dup_h1", "dup_canonical"]
+    cols = [c for c in cols if c in df.columns]
+    dup = df[
+        (df.get("dup_title", False)) |
+        (df.get("dup_meta_desc", False)) |
+        (df.get("dup_h1", False)) |
+        (df.get("dup_canonical", False))
+    ][cols].copy()
+    return dup
+
+
+# ---------------------------
+# UI
+# ---------------------------
+st.set_page_config(page_title="Screaming Flor – Auditoría SEO", layout="wide")
+st.title("🧰 Screaming Flor – Auditoría SEO (educativa)")
+
+st.markdown(
+    """
+Esta herramienta permite auditar páginas en batch para aprender y aplicar:
+- **SEO técnico básico** (status, redirects, HTTPS, señales de indexabilidad)
+- **SEO on-page** (title, meta description, headings, imágenes, enlaces)
+- **mínimos relevantes** (canonical, robots, hreflang, OG, schema básico)
+
+Podés cargar URLs de dos maneras:
+1) **Sitemap XML** (recomendado)  
+2) **Lista pegada de URLs**
+"""
+)
+
+with st.sidebar:
+    st.header("📥 Fuente de URLs")
+    mode = st.radio("¿Cómo querés cargar las páginas?", ["Desde Sitemap", "Pegar lista de URLs"], index=0)
+
+    max_urls = st.slider("Máximo de URLs a auditar", min_value=10, max_value=300, value=50, step=10)
+    concurrency = st.slider("Concurrencia (velocidad)", min_value=1, max_value=12, value=6, step=1)
+    timeout = st.slider("Timeout por URL (segundos)", min_value=5, max_value=30, value=15, step=1)
+
+    st.header("🧪 Umbrales educativos")
+    low_content_threshold = st.slider("Contenido bajo (word_count)", 50, 800, 250, 25)
+    st.caption("Tip: el umbral es orientativo; algunas páginas (p. ej. contacto) pueden ser cortas y estar OK.")
+
+urls: list[str] = []
+
+if mode == "Desde Sitemap":
+    sitemap_url = st.text_input("URL del sitemap (xml o .gz)", placeholder="https://tusitio.com/sitemap.xml")
+    if sitemap_url:
+        with st.spinner("Leyendo sitemap..."):
+            urls = load_sitemap_urls(sitemap_url, max_urls=max_urls)
+
+        if urls:
+            st.success(f"Se detectaron {len(urls)} URLs desde el sitemap (máx {max_urls}).")
+            with st.expander("Ver URLs detectadas"):
+                st.write("\n".join(urls[:200]))
+                if len(urls) > 200:
+                    st.caption("Mostrando las primeras 200.")
+        else:
+            st.warning("No se pudieron extraer URLs del sitemap. Revisá que la URL sea correcta y accesible.")
+
+else:
+    urls_text = st.text_area(
+        "Pegá URLs (una por línea)",
+        height=220,
+        placeholder="https://ejemplo.com/\nhttps://ejemplo.com/servicio\nhttps://ejemplo.com/blog/post"
+    )
+    if urls_text:
+        urls = [normalize_url(u) for u in urls_text.splitlines() if normalize_url(u)]
+        urls = list(dict.fromkeys(urls))  # dedupe manteniendo orden
+        urls = urls[:max_urls]
+        st.info(f"URLs cargadas: {len(urls)} (máx {max_urls}).")
+
+st.markdown("---")
+
+run = st.button("🚀 Ejecutar auditoría", type="primary", disabled=(len(urls) == 0))
+
+if run and urls:
+    base_domain = urlparse(urls[0]).netloc if urls else None
+
+    results = []
+    errors = 0
+
+    st.write(f"Auditoría en curso: **{len(urls)} URLs**")
+    progress = st.progress(0)
+
+    with st.spinner("Analizando páginas..."):
+        with ThreadPoolExecutor(max_workers=concurrency) as ex:
+            futures = {ex.submit(audit_one, u, base_domain, timeout): u for u in urls}
+            done = 0
+            for fut in as_completed(futures):
+                res = fut.result()
+                results.append(res)
+                if "error" in res:
+                    errors += 1
+                done += 1
+                progress.progress(int(done / len(urls) * 100))
+
+    df = pd.DataFrame(results)
+
+    # Post-procesos
+    df = add_duplicate_flags(df)
+    df = add_issue_flags(df)
+    # aplicar umbral elegido en UI
+    if "word_count_est" in df.columns:
+        df["issue_low_content"] = df["word_count_est"].fillna(0).astype(int) < int(low_content_threshold)
+        # recomputar notes + count con el nuevo umbral
+        df = add_issue_flags(df)  # vuelve a calcular issues_count y notes
+
+    # Orden útil
+    preferred_cols = [
+        "url", "final_url", "status_code", "redirected", "https", "indexable_est",
+        "issues_severity", "issues_count", "issues_notes",
+        "meta_noindex", "xrobots_noindex", "meta_robots", "x_robots_tag",
+        "title", "title_len", "title_ok", "dup_title",
+        "meta_desc", "meta_desc_len", "meta_desc_ok", "dup_meta_desc",
+        "h1_count", "h1_ok", "h1_text", "dup_h1",
+        "h2_count", "h3_count",
+        "canonical", "canonical_self", "dup_canonical",
+        "hreflang_count",
+        "word_count_est", "issue_low_content",
+        "images_total", "images_missing_alt",
+        "links_total", "internal_links_count", "external_links_count", "anchors_empty_text",
+        "og_title", "og_desc", "ldjson_blocks",
+        "content_type", "response_ms", "same_domain_as_input", "error"
+    ]
+    cols = [c for c in preferred_cols if c in df.columns] + [c for c in df.columns if c not in preferred_cols]
+    df = df[cols].sort_values(by=["issues_count", "status_code"], ascending=[False, True], na_position="last")
+
+    st.success(f"Auditoría finalizada. Errores de fetch: {errors}/{len(urls)}")
+
+    # Resumen ejecutivo
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("URLs auditadas", len(df))
+    with c2:
+        st.metric("Con issues", int((df["issues_count"] > 0).sum()))
+    with c3:
+        st.metric("No indexables (estimación)", int((~df.get("indexable_est", True)).sum()) if "indexable_est" in df else 0)
+    with c4:
+        st.metric("Duplicados (Title/Meta/H1)", int((df.get("dup_title", False) | df.get("dup_meta_desc", False) | df.get("dup_h1", False)).sum()))
+
+    st.markdown("### 📊 Resultados completos")
+    st.dataframe(df, use_container_width=True)
+
+    st.download_button(
+        "⬇️ Descargar CSV (completo)",
+        data=to_csv_bytes(df),
+        file_name="screaming_flor_audit_full.csv",
+        mime="text/csv"
+    )
+
+    # SOLO ISSUES
+    issues_df = df[df["issues_count"] > 0].copy()
+    st.markdown("---")
+    st.markdown("### 🧯 Solo issues (para armar el roadmap)")
+    st.caption("Este CSV es ideal para que el alumno copie/pegue en la tab de Priorización.")
+    st.dataframe(issues_df.head(300), use_container_width=True)
+
+    st.download_button(
+        "⬇️ Descargar CSV (solo issues)",
+        data=to_csv_bytes(issues_df),
+        file_name="screaming_flor_audit_issues_only.csv",
+        mime="text/csv"
+    )
+
+    # DUPLICADOS
+    dup_df = build_duplicates_df(df)
+    st.markdown("---")
+    st.markdown("### ♻️ Duplicados detectados (Title / Meta / H1 / Canonical)")
+    if len(dup_df) == 0:
+        st.info("No se detectaron duplicados en Title/Meta/H1/Canonical dentro del set auditado.")
+    else:
+        st.dataframe(dup_df, use_container_width=True)
+        st.download_button(
+            "⬇️ Descargar CSV (duplicados)",
+            data=to_csv_bytes(dup_df),
+            file_name="screaming_flor_audit_duplicates.csv",
+            mime="text/csv"
+        )
+
+    # Lectura rápida (alineada con tu documento)
+    st.markdown("---")
+    st.markdown("## 🧠 Lectura rápida (para el roadmap)")
+    st.markdown(
+        """
+Usá estas categorías para completar tu documento:
+
+- **Técnico / indexación:** status ≠ 200, noindex (meta o headers), problemas de HTTPS, redirects.
+- **On-page:** titles / metas fuera de rango, H1 incorrecto, duplicados de Title/Meta/H1.
+- **Contenido:** contenido bajo (word_count estimado por debajo del umbral definido).
+- **Accesibilidad / SEO:** imágenes sin ALT, anchors sin texto, enlazado interno pobre.
+- **Arquitectura:** canonical faltante o no self (señal para revisar duplicación/parametrización).
+"""
+    )
+
+# CTA final
+st.markdown("---")
+st.markdown(
+    """
+    <div style="text-align: center;">
+        <p>✨ Herramienta creada con fines educativos para aprender SEO de forma aplicada.</p>
+        <p>💌 Feedback / sugerencias: <a href="mailto:florencia@crawla.agency">florencia@crawla.agency</a></p>
+        <a href="https://www.linkedin.com/in/festevez3005/" target="_blank">
+            <button style="padding:10px 20px; font-size:16px; border:none; border-radius:8px; cursor:pointer;">
+                🌐 Conectá conmigo en LinkedIn
+            </button>
+        </a>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
