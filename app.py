@@ -1,95 +1,111 @@
 import streamlit as st
-import requests
 import pandas as pd
-import re
-from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse
 
-# --- IMPORTANTE: Aquí importarías tus funciones de lógica desde un archivo utils o dejarlas arriba ---
-# (Mantengo las funciones de extracción que ya tienes en tu código original)
+# --- IMPORTANTE: Aquí asumo que las funciones técnicas (normalize_url, audit_one, etc.) 
+# están presentes en el código. Por brevedad, mantendré la estructura de visualización 
+# conectada a los resultados reales.
 
 def screaming_flor_page():
     st.title("🌸 Screaming Flor: Auditoría SEO")
+    
     st.markdown("""
-        Esta herramienta analiza tu sitio y prioriza qué debes arreglar. 
-        **Guía de colores:** 🔴 Crítico | 🟡 Advertencia | 🟢 Optimizado
+        Analiza la salud técnica de tu sitio. Los resultados se dividen por categorías para facilitar la optimización.
+        **Prioridad:** 🔴 Crítico | 🟡 Advertencia | 🟢 Optimizado
     """)
 
-    # --- SIDEBAR: Configuraciones ---
+    # --- SIDEBAR: Configuración ---
     with st.sidebar:
-        st.header("⚙️ Configuración")
-        mode = st.radio("Cargar URLs:", ["Sitemap XML", "Lista Manual"])
-        max_urls = st.slider("Cant. de páginas", 5, 100, 20)
+        st.header("📥 Configuración de rastreo")
+        mode = st.radio("Fuente de URLs:", ["Sitemap XML", "Lista Manual"])
+        max_urls = st.slider("Máximo de páginas", 10, 300, 50)
+        concurrency = st.slider("Velocidad (Concurrencia)", 1, 12, 6)
         
+        st.header("🧪 Umbrales")
+        low_content_threshold = st.slider("Contenido bajo (palabras)", 50, 800, 250)
+
     # --- ENTRADA DE DATOS ---
+    urls = []
     if mode == "Sitemap XML":
-        url_input = st.text_input("URL del Sitemap", placeholder="https://ejemplo.com/sitemap.xml")
+        sitemap_url = st.text_input("URL del Sitemap", placeholder="https://tusitio.com/sitemap.xml")
+        if sitemap_url:
+            # Aquí llamamos a tu función original load_sitemap_urls
+            with st.spinner("Leyendo sitemap..."):
+                from Home import load_sitemap_urls # O donde residan tus funciones
+                urls = load_sitemap_urls(sitemap_url, max_urls=max_urls)
     else:
-        url_input = st.text_area("Pega tus URLs (una por línea)")
+        urls_text = st.text_area("Pega tus URLs (una por línea)")
+        if urls_text:
+            urls = [u.strip() for u in urls_text.splitlines() if u.strip()]
 
-    if st.button("🚀 Iniciar Escaneo", type="primary"):
-        if not url_input:
-            st.warning("Por favor, ingresa una fuente de datos.")
-            return
-
-        # Aquí llamarías a tus funciones: load_sitemap_urls o el split de texto
-        # SIMULACIÓN DE PROCESO (Para el ejemplo usamos una lista ficticia)
-        with st.spinner("Rastreando... esto puede tardar según la cantidad de URLs"):
-            # (Aquí va tu lógica de ThreadPoolExecutor y audit_one)
-            # Supongamos que ya tenemos el 'df' procesado con tus funciones add_issue_flags
-            pass
-
-        # --- VISUALIZACIÓN PEDAGÓGICA (Lo nuevo) ---
+    # --- EJECUCIÓN ---
+    if st.button("🚀 Ejecutar Auditoría", type="primary") and urls:
+        base_domain = urlparse(urls[0]).netloc
+        results = []
+        progress_bar = st.progress(0)
         
+        with st.spinner(f"Analizando {len(urls)} páginas..."):
+            with ThreadPoolExecutor(max_workers=concurrency) as executor:
+                # Usamos tu función técnica audit_one
+                futures = {executor.submit(audit_one, u, base_domain): u for u in urls}
+                for i, fut in enumerate(as_completed(futures)):
+                    results.append(fut.result())
+                    progress_bar.progress((i + 1) / len(urls))
+
+        # Convertimos a DataFrame y aplicamos tus funciones de flags
+        df = pd.DataFrame(results)
+        df = add_duplicate_flags(df)
+        df = add_issue_flags(df) # Esta función ya crea 'issues_severity' y 'issues_notes'
+        
+        # --- NUEVA INTERFAZ DE RESULTADOS ---
         st.divider()
-        st.header("📌 Resumen de Salud SEO")
         
-        # 1. Métricas de Alto Nivel (Cards)
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total URLs", "20") # Valores ejemplo
-        with col2:
-            st.error("Críticos: 5")
-        with col3:
-            st.warning("Advertencias: 8")
+        # Métricas principales
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("URLs analizadas", len(df))
+        c2.metric("Con errores 🔴", len(df[df['issues_severity'] == 'Alta']))
+        c3.metric("Advertencias 🟡", len(df[df['issues_severity'] == 'Media']))
+        c4.metric("Saludables 🟢", len(df[df['issues_severity'] == 'OK']))
 
-        # 2. Organización por Pestañas (Evita el agobio)
+        # Pestañas organizadas por tipo de problema
         tab1, tab2, tab3, tab4 = st.tabs([
-            "🎯 Prioridades (Roadmap)", 
-            "🌐 Técnico e Indexación", 
-            "📝 Contenido y On-Page", 
-            "🖼️ Imágenes y Enlaces"
+            "🎯 Prioridades de Acción", 
+            "🌐 Técnica e Indexación", 
+            "📝 Contenido y SEO On-Page", 
+            "🔗 Enlaces e Imágenes"
         ])
 
         with tab1:
-            st.subheader("¿Por dónde empezar?")
-            st.info("💡 **Consejo para profes:** Pidan a sus alumnos que resuelvan primero los errores 404 y los Noindex accidentales.")
+            st.subheader("Acciones recomendadas para hoy")
+            st.markdown("""
+                Estas páginas presentan errores críticos (Status 404, Noindex accidental o errores de servidor). 
+                **Recomendación:** Resuelve primero los elementos en rojo para recuperar visibilidad.
+            """)
             
-            # Aquí filtramos solo los errores graves
-            # df_critico = df[df['issues_severity'] == 'Alta']
-            st.write("Estas son las páginas que necesitan atención inmediata:")
-            # st.dataframe(df_critico[['url', 'issues_notes', 'status_code']])
+            # Filtramos solo los errores importantes para no abrumar
+            prioridades = df[df['issues_count'] > 0][['url', 'status_code', 'issues_severity', 'issues_notes']]
+            st.dataframe(prioridades.sort_values('issues_severity'), use_container_width=True)
 
         with tab2:
             st.subheader("Salud Técnica")
-            # Mostramos columnas de Status, HTTPS, Robots, Canonical
-            st.write("Revisa la indexabilidad de tus páginas.")
+            cols_tec = ['url', 'status_code', 'https', 'indexable_est', 'canonical', 'response_ms']
+            st.dataframe(df[[c for c in cols_tec if c in df.columns]], use_container_width=True)
 
         with tab3:
-            st.subheader("Optimización On-Page")
-            # Mostramos Titles, Metas, H1s
-            st.write("Asegúrate de que tus títulos y descripciones no estén duplicados.")
+            st.subheader("Optimización de Contenido")
+            cols_cont = ['url', 'title', 'title_len', 'meta_desc', 'word_count_est', 'h1_text']
+            st.dataframe(df[[c for c in cols_cont if c in df.columns]], use_container_width=True)
 
         with tab4:
-            st.subheader("Elementos Multimedia y Links")
-            # Imágenes sin ALT y enlaces rotos
-            st.write("Mejora la accesibilidad y el enlazado interno.")
+            st.subheader("Análisis de Enlaces y Multimedia")
+            cols_links = ['url', 'links_total', 'internal_links_count', 'images_total', 'images_missing_alt']
+            st.dataframe(df[[c for c in cols_links if c in df.columns]], use_container_width=True)
 
-        # 3. Exportación
+        # Botón de descarga al final
         st.divider()
-        st.download_button("📥 Descargar Reporte para Clase", data="...", file_name="auditoria_deseo.csv")
+        st.download_button("📥 Descargar reporte completo (CSV)", data=df.to_csv(index=False), file_name="auditoria_deseo.csv")
 
-# Ejecutar si se prueba solo
-if __name__ == "__main__":
-    screaming_flor_page()
+# Llamamos a la función
+screaming_flor_page()
