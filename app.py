@@ -115,13 +115,13 @@ def compute_score(row):
     return score
 
 
-def color_score(val):
-    if val >= 75:
-        return "background-color: #c6f6d5"
-    elif val >= 50:
-        return "background-color: #fefcbf"
+def score_label(score):
+    if score >= 75:
+        return "🟢 Alto"
+    elif score >= 50:
+        return "🟡 Medio"
     else:
-        return "background-color: #feb2b2"
+        return "🔴 Bajo"
 
 
 # --- UI ---
@@ -160,17 +160,29 @@ if st.button("Auditar") and urls:
 
     df = pd.DataFrame(results)
 
+    # --- VALIDACIÓN SEGURA ---
+    if df.empty:
+        st.error("No se pudieron analizar URLs")
+        st.stop()
+
     # score
     df["seo_score"] = df.apply(compute_score, axis=1)
+    df["score_label"] = df["seo_score"].apply(score_label)
 
     st.subheader("Resultados")
 
-    cols_to_show = ["url", "status_code", "title_len", "h1_count", "word_count", "seo_score"]
+    cols_to_show = [
+        "url",
+        "status_code",
+        "title_len",
+        "h1_count",
+        "word_count",
+        "seo_score",
+        "score_label"
+    ]
 
-    # 🔥 SOLUCIÓN SIN ERROR
-    styled_df = df[cols_to_show].style.map(color_score, subset=["seo_score"])
-
-    st.dataframe(styled_df, use_container_width=True)
+    # ✅ SIN STYLE (100% estable)
+    st.dataframe(df[cols_to_show], use_container_width=True)
 
     st.download_button(
         "Descargar CSV",
